@@ -1,0 +1,19 @@
+[passwords/credential%3A__REST_CREDENTIAL__%23TA_microsoft_o365_email_for_splunk%23configs%2Fconf-ta_microsoft_o365_email_for_splunk_account%3AO365%60%60splunk_cred_sep%60%601%3A]
+owner = admin
+version = 8.0.6
+modtime = 1607462238.347289000
+
+[passwords/credential%3A__REST_CREDENTIAL__%23TA_microsoft_o365_email_for_splunk%23configs%2Fconf-ta_microsoft_o365_email_for_splunk_account%3AO365%60%60splunk_cred_sep%60%602%3A]
+owner = admin
+version = 8.0.6
+modtime = 1607462238.358733000
+
+[ta_microsoft_o365_email_for_splunk_account/O365]
+owner = admin
+version = 8.0.6
+modtime = 1607462238.369495000
+
+[inputs/o365_email%3A%2F%2FO365]
+owner = admin
+version = 8.0.6
+modtime = 1607462386.324395000

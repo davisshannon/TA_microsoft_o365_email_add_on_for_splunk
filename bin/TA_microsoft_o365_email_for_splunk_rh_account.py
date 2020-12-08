@@ -1,5 +1,5 @@
 
-import splunk_ta_microsoft_o365_email_declare
+import ta_microsoft_o365_email_for_splunk_declare
 
 from splunktaucclib.rest_handler.endpoint import (
     field,
@@ -39,7 +39,7 @@ model = RestModel(fields, name=None)
 
 
 endpoint = SingleModel(
-    'splunk_ta_microsoft_o365_email_account',
+    'ta_microsoft_o365_email_for_splunk_account',
     model,
 )
 

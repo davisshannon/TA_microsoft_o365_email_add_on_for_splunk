@@ -1,5 +1,5 @@
 
-import splunk_ta_microsoft_o365_email_declare
+import ta_microsoft_o365_email_for_splunk_declare
 
 from splunktaucclib.rest_handler.endpoint import (
     field,
@@ -92,7 +92,7 @@ model_logging = RestModel(fields_logging, name='logging')
 
 
 endpoint = MultipleModel(
-    'splunk_ta_microsoft_o365_email_settings',
+    'ta_microsoft_o365_email_for_splunk_settings',
     models=[
         model_proxy, 
         model_logging
