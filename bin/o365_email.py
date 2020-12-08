@@ -1,4 +1,4 @@
-import ta_microsoft_o365_email_for_splunk_declare
+import ta_microsoft_o365_email_add_on_for_splunk_declare
 
 import os
 import sys
@@ -27,7 +27,7 @@ class ModInputo365_email(modinput_wrapper.base_modinput.BaseModInput):
             use_single_instance = input_module.use_single_instance_mode()
         else:
             use_single_instance = False
-        super(ModInputo365_email, self).__init__("ta_microsoft_o365_email_for_splunk", "o365_email", use_single_instance)
+        super(ModInputo365_email, self).__init__("ta_microsoft_o365_email_add_on_for_splunk", "o365_email", use_single_instance)
         self.global_checkbox_fields = None
 
     def get_scheme(self):
@@ -85,7 +85,7 @@ class ModInputo365_email(modinput_wrapper.base_modinput.BaseModInput):
         return scheme
 
     def get_app_name(self):
-        return "TA_microsoft_o365_email_for_splunk"
+        return "TA_microsoft_o365_email_add_on_for_splunk"
 
     def validate_input(self, definition):
         """validate the input stanza"""

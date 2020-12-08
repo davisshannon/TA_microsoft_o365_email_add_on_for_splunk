@@ -4,8 +4,8 @@
     "title": "Microsoft O365 Email Add-on for Splunk",
     "id": {
       "group": null,
-      "name": "TA_microsoft_o365_email_for_splunk",
-      "version": "1.0.20"
+      "name": "TA_microsoft_o365_email_add_on_for_splunk",
+      "version": "1.0.21"
     },
     "author": [
       {

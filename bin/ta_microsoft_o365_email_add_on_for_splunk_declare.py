@@ -14,8 +14,8 @@ if sys.version_info[0] < 3:
 else:
     py_version = "aob_py3"
 
-ta_name = 'TA_microsoft_o365_email_for_splunk'
-ta_lib_name = 'ta_microsoft_o365_email_for_splunk'
+ta_name = 'TA_microsoft_o365_email_add_on_for_splunk'
+ta_lib_name = 'ta_microsoft_o365_email_add_on_for_splunk'
 pattern = re.compile(r"[\\/]etc[\\/]apps[\\/][^\\/]+[\\/]bin[\\/]?$")
 new_paths = [path for path in sys.path if not pattern.search(path) or ta_name in path]
 new_paths.insert(0, os.path.sep.join([os.path.dirname(__file__), ta_lib_name]))

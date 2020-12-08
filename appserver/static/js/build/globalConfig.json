@@ -1,10 +1,10 @@
 {
     "meta": {
-        "name": "TA_microsoft_o365_email_for_splunk",
-        "displayName": "Splunk Add-on for Microsoft O365 Email",
-        "version": "1.0.19",
+        "name": "TA_microsoft_o365_email_add_on_for_splunk",
+        "displayName": "Microsoft O365 Email Add-on for Splunk",
+        "version": "1.0.21",
         "apiVersion": "3.0.0",
-        "restRoot": "TA_microsoft_o365_email_for_splunk"
+        "restRoot": "TA_microsoft_o365_email_add_on_for_splunk"
     },
     "pages": {
         "configuration": {
@@ -57,7 +57,7 @@
                             "label": "Client ID",
                             "type": "text",
                             "required": true,
-                            "help": "Enter the Client ID from the Azure App Registration Process.",
+                            "help": "Enter the Client ID from the Azure app registration process.",
                             "options": {
                                 "placeholder": "Enter the Client ID here"
                             },
@@ -76,7 +76,7 @@
                             "type": "text",
                             "encrypted": true,
                             "required": true,
-                            "help": "Enter the Client Secret from the Azure App Registration Process.",
+                            "help": "Enter the Client Secret from the Azure app registration process.",
                             "validators": [
                                 {
                                     "type": "string",
