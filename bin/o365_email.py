@@ -50,32 +50,72 @@ class ModInputo365_email(modinput_wrapper.base_modinput.BaseModInput):
                                          description="Please enter the audit email configured in the O365 mail flow rule",
                                          required_on_create=True,
                                          required_on_edit=False))
+        scheme.add_argument(smi.Argument("inbox_id", title="Inbox ID",
+                                         description="Go to https://developer.microsoft.com/en-us/graph/graph-explorer, log in as the audit email account, and run https://graph.microsoft.com/v1.0/me/mailFolders.  Copy the id value for the Inbox folder.",
+                                         required_on_create=True,
+                                         required_on_edit=False))
         scheme.add_argument(smi.Argument("tenant", title="Tenant ID",
                                          description="Please enter the Tenant ID from the Azure App registration process",
                                          required_on_create=True,
                                          required_on_edit=False))
-        scheme.add_argument(smi.Argument("get_attachment_info", title="Get Attachment Info",
+        scheme.add_argument(smi.Argument("endpoint", title="Endpoint",
                                          description="",
+                                         required_on_create=True,
+                                         required_on_edit=False))
+        scheme.add_argument(smi.Argument("get_attachment_info", title="Get Attachment Info",
+                                         description="Gathers basic attachment info (name, type, size, hash, etc).",
+                                         required_on_create=False,
+                                         required_on_edit=False))
+        scheme.add_argument(smi.Argument("read_zip_files", title="Read Zip Files",
+                                         description="Attempts to read file names and file hashes from within zip files.  Requires Get Attachment Info to be selected.",
                                          required_on_create=False,
                                          required_on_edit=False))
         scheme.add_argument(smi.Argument("file_hash_algorithm", title="File Hash Algorithm",
-                                         description="Get Attachment Info Required",
+                                         description="Used for attachment and zip file hashing.",
                                          required_on_create=False,
                                          required_on_edit=False))
-        scheme.add_argument(smi.Argument("attachment_analysis", title="Attachment Analysis",
-                                         description="Get Attachment Info Required",
+        scheme.add_argument(smi.Argument("extract_iocs", title="Extract IOCs",
+                                         description="Attempts to extract IOCs from supported attachment types (currently HTML, PDF, XML, CSV) and email bodies.  (URLs, domains, ipv4, ipv6, hashes, etc).",
+                                         required_on_create=False,
+                                         required_on_edit=False))
+        scheme.add_argument(smi.Argument("macro_analysis", title="Macro Analysis",
+                                         description="Detects and analyses macros within Office document formats.",
+                                         required_on_create=False,
+                                         required_on_edit=False))
+        scheme.add_argument(smi.Argument("attachment_data_ingest", title="Attachment Data Ingest",
+                                         description="Will attempt to ingest the actual data from the attachment.  WARNING- POTENTIALLY LARGE INGEST IF ENABLED.  Can also take more time if the files are large.",
                                          required_on_create=False,
                                          required_on_edit=False))
         scheme.add_argument(smi.Argument("get_body", title="Get Body",
-                                         description="Retrieves the whole message body.WARNING- POTENTIALLY LARGE INGEST IF ENABLED",
+                                         description="Retrieves the whole message body for emails and any emails that are attached.WARNING- POTENTIALLY LARGE INGEST IF ENABLED",
                                          required_on_create=False,
                                          required_on_edit=False))
         scheme.add_argument(smi.Argument("get_body_preview", title="Get Body Preview",
                                          description="Only retrieves the first 255 characters in the email body",
                                          required_on_create=False,
                                          required_on_edit=False))
-        scheme.add_argument(smi.Argument("show_relays", title="Show Relays",
-                                         description="",
+        scheme.add_argument(smi.Argument("get_message_path", title="Get Message Path",
+                                         description="Gathers all MTA hops the message traversed",
+                                         required_on_create=False,
+                                         required_on_edit=False))
+        scheme.add_argument(smi.Argument("get_internet_headers", title="Get Internet Headers",
+                                         description="Retrieves All Internet Headers",
+                                         required_on_create=False,
+                                         required_on_edit=False))
+        scheme.add_argument(smi.Argument("get_auth_results", title="Get Auth Results",
+                                         description="Gathers authentication results headers",
+                                         required_on_create=False,
+                                         required_on_edit=False))
+        scheme.add_argument(smi.Argument("get_spf_results", title="Get SPF Results",
+                                         description="Gathers SPF results from the headers",
+                                         required_on_create=False,
+                                         required_on_edit=False))
+        scheme.add_argument(smi.Argument("get_dkim_signature", title="Get DKIM Signature",
+                                         description="Gathers DKIM signature results from the headers",
+                                         required_on_create=False,
+                                         required_on_edit=False))
+        scheme.add_argument(smi.Argument("get_x_headers", title="Get X Headers",
+                                         description="Gathers all X-Headers from the headers",
                                          required_on_create=False,
                                          required_on_edit=False))
         scheme.add_argument(smi.Argument("global_account", title="Global Account",
@@ -103,9 +143,17 @@ class ModInputo365_email(modinput_wrapper.base_modinput.BaseModInput):
     def get_checkbox_fields(self):
         checkbox_fields = []
         checkbox_fields.append("get_attachment_info")
+        checkbox_fields.append("read_zip_files")
+        checkbox_fields.append("extract_iocs")
+        checkbox_fields.append("macro_analysis")
         checkbox_fields.append("get_body")
         checkbox_fields.append("get_body_preview")
-        checkbox_fields.append("show_relays")
+        checkbox_fields.append("get_message_path")
+        checkbox_fields.append("get_internet_headers")
+        checkbox_fields.append("get_auth_results")
+        checkbox_fields.append("get_spf_results")
+        checkbox_fields.append("get_dkim_signature")
+        checkbox_fields.append("get_x_headers")
         return checkbox_fields
 
     def get_global_checkbox_fields(self):

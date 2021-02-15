@@ -1,10 +1,20 @@
 [o365_email://<name>]
 audit_email_account = Please enter the audit email configured in the O365 mail flow rule
+inbox_id = Go to https://developer.microsoft.com/en-us/graph/graph-explorer, log in as the audit email account, and run https://graph.microsoft.com/v1.0/me/mailFolders.  Copy the id value for the Inbox folder.
 tenant = Please enter the Tenant ID from the Azure App registration process
-get_attachment_info = 
-file_hash_algorithm = Get Attachment Info Required
-attachment_analysis = Get Attachment Info Required
-get_body = Retrieves the whole message body.WARNING- POTENTIALLY LARGE INGEST IF ENABLED
+endpoint = 
+get_attachment_info = Gathers basic attachment info (name, type, size, hash, etc).
+read_zip_files = Attempts to read file names and file hashes from within zip files.  Requires Get Attachment Info to be selected.
+file_hash_algorithm = Used for attachment and zip file hashing.
+extract_iocs = Attempts to extract IOCs from supported attachment types (currently HTML, PDF, XML, CSV) and email bodies.  (URLs, domains, ipv4, ipv6, hashes, etc).
+macro_analysis = Detects and analyses macros within Office document formats.
+attachment_data_ingest = Will attempt to ingest the actual data from the attachment.  WARNING- POTENTIALLY LARGE INGEST IF ENABLED.  Can also take more time if the files are large.
+get_body = Retrieves the whole message body for emails and any emails that are attached.WARNING- POTENTIALLY LARGE INGEST IF ENABLED
 get_body_preview = Only retrieves the first 255 characters in the email body
-show_relays = 
+get_message_path = Gathers all MTA hops the message traversed
+get_internet_headers = Retrieves All Internet Headers
+get_auth_results = Gathers authentication results headers
+get_spf_results = Gathers SPF results from the headers
+get_dkim_signature = Gathers DKIM signature results from the headers
+get_x_headers = Gathers all X-Headers from the headers
 global_account =

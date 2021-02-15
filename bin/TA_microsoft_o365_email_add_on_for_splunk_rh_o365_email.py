@@ -44,6 +44,16 @@ fields = [
         )
     ), 
     field.RestField(
+        'inbox_id',
+        required=True,
+        encrypted=False,
+        default=None,
+        validator=validator.String(
+            min_len=0, 
+            max_len=8192, 
+        )
+    ), 
+    field.RestField(
         'tenant',
         required=True,
         encrypted=False,
@@ -54,7 +64,21 @@ fields = [
         )
     ), 
     field.RestField(
+        'endpoint',
+        required=True,
+        encrypted=False,
+        default='worldwide',
+        validator=None
+    ), 
+    field.RestField(
         'get_attachment_info',
+        required=False,
+        encrypted=False,
+        default=None,
+        validator=None
+    ), 
+    field.RestField(
+        'read_zip_files',
         required=False,
         encrypted=False,
         default=None,
@@ -68,7 +92,21 @@ fields = [
         validator=None
     ), 
     field.RestField(
-        'attachment_analysis',
+        'extract_iocs',
+        required=False,
+        encrypted=False,
+        default=None,
+        validator=None
+    ), 
+    field.RestField(
+        'macro_analysis',
+        required=False,
+        encrypted=False,
+        default=None,
+        validator=None
+    ), 
+    field.RestField(
+        'attachment_data_ingest',
         required=False,
         encrypted=False,
         default=None,
@@ -89,7 +127,42 @@ fields = [
         validator=None
     ), 
     field.RestField(
-        'show_relays',
+        'get_message_path',
+        required=False,
+        encrypted=False,
+        default=None,
+        validator=None
+    ), 
+    field.RestField(
+        'get_internet_headers',
+        required=False,
+        encrypted=False,
+        default=None,
+        validator=None
+    ), 
+    field.RestField(
+        'get_auth_results',
+        required=False,
+        encrypted=False,
+        default=None,
+        validator=None
+    ), 
+    field.RestField(
+        'get_spf_results',
+        required=False,
+        encrypted=False,
+        default=None,
+        validator=None
+    ), 
+    field.RestField(
+        'get_dkim_signature',
+        required=False,
+        encrypted=False,
+        default=None,
+        validator=None
+    ), 
+    field.RestField(
+        'get_x_headers',
         required=False,
         encrypted=False,
         default=None,

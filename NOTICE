@@ -7,6 +7,9 @@ https://www.flaticon.com/authors/pixel-perfect
 Macro Detection via python-oletools-
 https://github.com/decalage2/oletools
 
+PDF data extraction via pdfminer.six-
+https://github.com/pdfminer/pdfminer.six
+
 This license applies to the python-oletools package, apart from the thirdparty folder which contains third-party files published with their own license.
 
 The python-oletools package is copyright (c) 2012-2020 Philippe Lagadec (http://www.decalage.info)

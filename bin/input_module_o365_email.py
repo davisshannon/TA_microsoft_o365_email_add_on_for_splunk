@@ -10,37 +10,59 @@ import base64
 import re
 import email
 import html
-from email.parser import HeaderParser
-from email.parser import BytesParser
+import io
+import cryptography
+import csv
+import itertools
 from oletools.olevba import VBA_Parser, VBA_Scanner
 from bs4 import BeautifulSoup
+from pdfminer.converter import TextConverter
+from pdfminer.layout import LAParams
+from pdfminer.pdfdocument import PDFDocument
+from pdfminer.pdfinterp import PDFResourceManager, PDFPageInterpreter
+from pdfminer.pdfpage import PDFPage
+from pdfminer.pdfparser import PDFParser
+from io import StringIO
+from zipfile import ZipFile
+
 
 ACCESS_TOKEN = 'access_token'
 CURRENT_TOKEN = None
 LOG_DIRECTORY_NAME = 'logs'
 TIME_FORMAT = '%Y-%m-%dT%H:%M:%S.000Z'
 
+#Regex statements used in IOC extraction routines.
+url_re = re.compile(r'(http|ftp|https|ftps|scp):\/\/([\w_-]+(?:(?:\.[\w_-]+)+))([\w.,@?^=%&:\/~+#-;]*[\w@?^=%&\/~+#-])?')
+domain_re = re.compile(r'\b((?=[a-z0-9-]{1,63}\.)(xn--)?[a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,63}\b')
+ipv4_re = re.compile(r'((?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)')
+ipv6_re = re.compile(r'\b(?:[a-f0-9]{1,4}:|:){2,7}(?:[a-f0-9]{1,4}|:)\b')
 
+#Setting minimum interval in TA to 60 seconds
 def validate_input(helper, definition):
     interval_in_seconds = int(definition.parameters.get('interval'))
-    if interval_in_seconds < 60:
-        raise ValueError("field 'Interval' should be at least 60")
-    filter_arg = definition.parameters.get('filter')
-    if filter_arg is not None and 'lastModifiedDateTime' in filter_arg:
-        raise ValueError("'lastModifiedDateTime' is a reserved property and cannot be part of the filter")
+    if (interval_in_seconds < 60 or interval_in_seconds > 600):
+        raise ValueError("field 'Interval' should be between 60 and 600")
 
-
+#Obtain access token via oauth2
 def _get_access_token(helper):
+    
+    if helper.get_arg('endpoint') == 'worldwide':
+        login_url = 'https://login.microsoftonline.com/'
+        graph_url = 'https://graph.microsoft.com/'
+    elif helper.get_arg('endpoint') == 'gcchigh':
+        login_url = 'https://login.microsoftonline.us/'
+        graph_url = 'https://graph.microsoft.us/'
+        
     global CURRENT_TOKEN
     if CURRENT_TOKEN is None:
         _data = {
             'client_id': helper.get_arg('global_account')['username'],
-            'scope': 'https://graph.microsoft.com/.default',
+            'scope': graph_url + '.default',
             'client_secret': helper.get_arg('global_account')['password'],
             'grant_type': 'client_credentials',
             'Content-Type': 'application/x-www-form-urlencoded'
             }
-        _url = 'https://login.microsoftonline.com/' + helper.get_arg('tenant') + '/oauth2/v2.0/token'
+        _url = login_url + helper.get_arg('tenant') + '/oauth2/v2.0/token'
         if (sys.version_info > (3, 0)):
             access_token = helper.send_http_request(_url, "POST", payload=urllib.parse.urlencode(_data), timeout=(15.0, 15.0)).json()
         else:
@@ -52,6 +74,7 @@ def _get_access_token(helper):
     else:
         return CURRENT_TOKEN
 
+#Returning version of TA
 def _get_app_version(helper):
     app_version = ""
     if 'session_key' in helper.context_meta:
@@ -60,33 +83,26 @@ def _get_app_version(helper):
         app_version = entity.get('version')
     return app_version
 
-
-def _write_events(helper, ew, emails=None):
-    if emails:
-        for email in emails:
+#Function to write events to Splunk
+def _write_events(helper, ew, messages=None):
+    if messages:
+        for message in messages:
             event = helper.new_event(
                 source=helper.get_input_type(),
                 index=helper.get_output_index(),
                 sourcetype=helper.get_sourcetype(),
-                data=json.dumps(email))
+                data=json.dumps(message))
             ew.write_event(event)
 
-def _get_inbox_id(helper):
-    access_token = _get_access_token(helper)
-    headers = {"Authorization": "Bearer " + access_token,
-                "User-Agent": "MicrosoftGraphEmail-Splunk/" + _get_app_version(helper)}
-
-    response = helper.send_http_request("https://graph.microsoft.com/v1.0/users/" + helper.get_arg('audit_email_account') + "/mailFolders", "GET", headers=headers, parameters=None, timeout=(15.0, 15.0)).json()
-
-    for item in response["value"]:
-        if item["displayName"] == "Inbox":
-            inbox_id = str(item["id"])
-
-    return inbox_id
-
+#Purging of messages after ingest to Splunk.  This is using the recoverableitemspurges folder, which emulates a hard delete.
 def _purge_messages(helper, messages):
+    
+    if helper.get_arg('endpoint') == 'worldwide':
+        graph_url = 'https://graph.microsoft.com/v1.0'
+    elif helper.get_arg('endpoint') == 'gcchigh':
+        graph_url = 'https://graph.microsoft.us/v1.0'
+        
     access_token = _get_access_token(helper)
-    inbox_id = _get_inbox_id(helper)
 
     headers = {"Authorization": "Bearer " + access_token,
                 "Content-type": "application/json"}
@@ -96,75 +112,302 @@ def _purge_messages(helper, messages):
 
     for message in messages:
         for item in message:
-            response = helper.send_http_request("https://graph.microsoft.com/v1.0/users/" + helper.get_arg('audit_email_account') + "/messages/" + item["id"] + "/move", "POST", headers=headers, payload=_data, timeout
+            response = helper.send_http_request(graph_url + "/users/" + helper.get_arg('audit_email_account') + "/messages/" + item["id"] + "/move", "POST", headers=headers, payload=_data, timeout
 =(15.0, 15.0))
 
-def collect_events(helper, ew):
-    access_token = _get_access_token(helper)
-    inbox_id = _get_inbox_id(helper)
-    headers = {"Authorization": "Bearer " + access_token,
-                "User-Agent": "MicrosoftGraphEmail-Splunk/" + _get_app_version(helper)}
+#Top level IOC extraction from various items (email bodies, supported file types, etc).  Currently only attempting URLS, domains, and IP address (v4 and v6). Calls URL, Domain, and IP address functions below.
+def extract_iocs(helper, data):
+    return itertools.chain(
+        extract_urls(data),
+        extract_domains(data),
+        extract_ips(data)
+    )
 
+#URL IOC extraction function.
+def extract_urls(data):
+    urls = itertools.chain(
+        url_re.finditer(data)
+    )
+    for url in urls:
+        url = url.group(0)
+        yield url
+
+#Domain IOC extraction function.
+def extract_domains(data):
+    domains = itertools.chain(
+        domain_re.finditer(data)
+    )
+    for domain in domains:
+        domain = domain.group(0)
+        yield domain
+
+#Top level IP address IOC extraction function. Calls IPv4 and IPv6 functions below.
+def extract_ips(data):
+    return itertools.chain(
+        extract_ipv4(data),
+        extract_ipv6(data)
+    )
+
+#IPv4 IOC extraction function.
+def extract_ipv4(data):
+    ipv4s = itertools.chain(
+        ipv4_re.finditer(data)
+    )
+    for ip in ipv4s:
+        ip = ip.group(0)
+        yield ip
+
+#IPv6 IOC extraction function.
+def extract_ipv6(data):
+    ipv6s = itertools.chain(
+        ipv6_re.finditer(data)
+    )
+    for ip in ipv6s:
+        ip = ip.group(0)
+        yield ip
+
+#Main function for gathering emails.
+def collect_events(helper, ew):
+    
+    if helper.get_arg('endpoint') == 'worldwide':
+        graph_url = 'https://graph.microsoft.com/v1.0'
+    elif helper.get_arg('endpoint') == 'gcchigh':
+        graph_url = 'https://graph.microsoft.us/v1.0'
+        
+    access_token = _get_access_token(helper)
+
+    headers = {"Authorization": "Bearer " + access_token,
+                "User-Agent": "MicrosoftGraphEmail-Splunk/" + _get_app_version(helper),
+                "Prefer": "outlook.body-content-type=text"}
+
+    #defining email account to retrieve messages from
+    endpoint = "/users/" + helper.get_arg('audit_email_account')
+
+    #defining inbox id to retrieve messages from
+    endpoint += "/mailFolders/" + helper.get_arg('inbox_id') + "/messages/"
+
+    #expanding property id 0x0E08 to gather message size, and then expanding attachments to get fileattachment type contentBytes
+    endpoint += "?$expand=SingleValueExtendedProperties($filter=Id eq 'LONG 0x0E08'),attachments"
+        
+    #selecting which fields to retrieve from emails
+    endpoint += "&$select=receivedDateTime,subject,sender,from,hasAttachments,internetMessageId,toRecipients,ccRecipients,bccRecipients,replyTo,internetMessageHeaders,body,bodyPreview"
+
+    #defining how many messages to retrieve from each page
+    endpoint += "&$top=980"
+
+    #getting the oldest messages first
+    endpoint += "&$orderby=receivedDateTime"
+
+    #getting the total count of messages in each round
+    endpoint += "&$count=true"
+
+    messages_response = helper.send_http_request(graph_url + endpoint, "GET", headers=headers, parameters=None, timeout=(15.0, 15.0)).json()
+
+    helper.log_info("Retrieving " + str(messages_response['@odata.count']) + " messages")
+    
+    messages = []
+    
+    #Routine that iterates through the messages.  Uses the @odata.nextLink values to find the next endpoint to query.
+    
+    messages.append(messages_response['value'])
+
+    #Calculate how many pages of 980 messages we'll attempt based on the interval value.  Helps to keep requests within API limits.
+    
     interval_in_seconds = int(helper.get_arg('interval'))
 
-    endpoint = "/users/" + helper.get_arg('audit_email_account')
-    endpoint += "/mailFolders/" + inbox_id + "/messages/?$expand=SingleValueExtendedProperties($filter=Id eq 'LONG 0x0E08')"
-    endpoint += "&$select=subject,sender,hasAttachments,internetMessageId,toRecipients,ccRecipients,bccRecipients,replyTo"
+    url_count_limit = (interval_in_seconds//60) - 1
 
-    if helper.get_arg('get_body_preview'):
-            endpoint += ",bodyPreview"
+    if url_count_limit>0:
 
-    messages_response = helper.send_http_request("https://graph.microsoft.com/v1.0" + endpoint, "GET", headers=headers, parameters=None, timeout=(15.0, 15.0)).json()
+        url_count = 0
+    
+        while "@odata.nextLink" in messages_response:
+            if url_count < url_count_limit:
+                nextlinkurl = messages_response["@odata.nextLink"]
+                messages_response = helper.send_http_request(nextlinkurl, "GET", headers=headers, parameters=None, timeout=(15.0, 15.0)).json()
+                messages.append(messages_response['value'])
+                url_count += 1
+            else:
+                helper.log_debug("Protecting API limits, breaking out")
+                break
 
-    messages = []
-
-    messages.append(messages_response['value'])
-    url_count = 1
-    while "@odata.nextLink" in messages_response:
-        if url_count < 1000:
-              nextlinkurl = messages_response["@odata.nextLink"]
-              messages_response = helper.send_http_request(nextlinkurl, "GET", headers=headers, parameters=None, timeout=(15.0, 15.0)).json()
-              messages.append(messages_response['value'])
-              url_count += 1
-        else:
-            helper.log_debug("Loop detecting, breaking out")
-            break
-
+    #Routine to find attachments in messages.  This caters for both standard, as well as inline attachments.  MS Graph doesn't list inline attachments in the "hasAttachments" value, this fixes that.
+    message_data = []
+    
     for message in messages:
+        
         for item in message:
 
-            endpoint = "/users/" + helper.get_arg('audit_email_account')
-            endpoint += "/messages/" + item["id"]
-            endpoint += "/attachments"
+            message_items = {}
+            
+            message_items['_time'] = item['receivedDateTime']
+            message_items['to'] = item['toRecipients']
+            message_items['from'] = item['from']
+            message_items['sender'] = item['sender']
+            message_items['subject'] = item['subject']
+            message_items['id'] = item['id']
+            message_items['internetMessageId'] = item['internetMessageId']
+            message_items['ccRecipients'] = item['ccRecipients']
+            message_items['bccRecipients'] = item['bccRecipients']
+            message_items['replyTo'] = item['replyTo']
+            message_items['hasAttachments'] = item['hasAttachments']
+            
+            message_body = item['body']['content']
+            body_preview = item['bodyPreview']
+            attachments = item['attachments']
+            internet_message_headers = item['internetMessageHeaders']
+            single_value_properties = item['singleValueExtendedProperties']
+            
+            #message path calculations
+            message_path = []
+            path_item = {}
+            
+            for item in internet_message_headers:
+                if item['name'] == "Received":
+                    path_item=item
+                    message_path.append(path_item)
+            
+            src_line = str(message_path[-1])
+            dest_line = str(message_path[0])
+            
+            re_by = re.compile(r'(?<=\bby\s)(\S+)')
+            re_from = re.compile(r'(?<=\bfrom\s)(\S+)')
+            
+            dest = re_by.search(dest_line)
+            
+            if re_from.search(src_line):
+                src = re_from.search(src_line)
+            elif re_by.search(src_line):
+                src = re_by.search(src_line)
+            
+            message_items['src'] = str(src[0])    
+            message_items['dest'] = str(dest[0])
+            
+            #size mapping
+            for item in single_value_properties:
+                if item['id'] == "Long 0xe08":
+                    message_items['size'] = item['value']
+                    
+            if helper.get_arg('get_body'):
+                message_items['body'] = message_body
+            
+            if helper.get_arg('get_body_preview'):
+                message_items['bodyPreview'] = body_preview
+            
+            if helper.get_arg('get_internet_headers'):
+                message_items['Internet-Headers'] = internet_message_headers
+            
+            if helper.get_arg('get_attachment_info'):
+                message_items['attachments'] = attachments
+                
+            if helper.get_arg('get_message_path'):
+                message_items['message_path'] = message_path
+            
+            if helper.get_arg('get_x_headers'):
+                
+                x_headers = []
+                x_header_item = {}
+                
+                for item in internet_message_headers:
+                    if "X-" in item['name']:
+                        x_header_item=item
+                        x_headers.append(x_header_item)
+                        
+                message_items['X-Headers'] = x_headers
+             
+            if helper.get_arg('get_auth_results'):
+                
+                auth_results = []
+                auth_results_item = {}
+                
+                for item in internet_message_headers:
+                    if "Authentication-Results" in item['name']:
+                        auth_results_item=item
+                        auth_results.append(auth_results_item)
+                        
+                message_items['Authentication-Results'] = auth_results
+            
+            if helper.get_arg('get_spf_results'):
+                
+                spf_results = []
+                spf_results_item = {}
+                
+                for item in internet_message_headers:
+                    if "Received-SPF" in item['name']:
+                        spf_results_item=item
+                        spf_results.append(spf_results_item)
+                        
+                message_items['Received-SPF'] = spf_results
+            
+            if helper.get_arg('get_dkim_signature'):
+                
+                dkim_sig = []
+                dkim_sig_item = {}
+                
+                for item in internet_message_headers:
+                    if "DKIM-Signature" in item['name']:
+                        dkim_sig_item=item
+                        dkim_sig.append(dkim_sig_item)
+                        
+                message_items['DKIM-Signature'] = dkim_sig
+                
+            message_data.append(message_items)
+            
+            if helper.get_arg('get_body'):
+                if helper.get_arg('extract_iocs'):
 
-            attach_exist = helper.send_http_request("https://graph.microsoft.com/v1.0" + endpoint, "GET", headers=headers, parameters=None, timeout=(15.0, 15.0)).json()
+                    iocs = extract_iocs(helper, message_items["body"])
 
-            if helper.get_arg('get_attachment_info') and (attach_exist['value'] is not None):
+                    email_iocs = []
 
-                for attachment in attach_exist["value"]:
-                    if attachment["@odata.type"] == "#microsoft.graph.fileAttachment":
+                    for ioc in iocs:
+                        if not ioc in email_iocs:
+                            email_iocs.append(ioc)
+                    if email_iocs:
+                        message_items['iocs'] = email_iocs
+                        
+            if helper.get_arg('get_attachment_info'):
 
-                        endpoint = "/users/" + helper.get_arg('audit_email_account')
-                        endpoint += "/messages/" + item["id"]
-                        endpoint += "/attachments/?$select=id,size,contentType,name&$expand=microsoft.graph.itemattachment/item/"
+                if message_items['attachments'] is not None:
 
-                        attach_resp = helper.send_http_request("https://graph.microsoft.com/v1.0" + endpoint, "GET", headers=headers, parameters=None, timeout=(15.0, 15.0)).json()
+                    attach_data = []
 
-                        attach_data = []
-                        count = 0
+                    for attachment in message_items["attachments"]:
 
-                        for attachment in attach_resp["value"]:
+                        #Looks for itemAttachment type, which is a contact, event, or message that's attached.
+                        if attachment["@odata.type"] == "#microsoft.graph.itemAttachment":
 
-                            attach_endpoint = "/users/" + helper.get_arg('audit_email_account')
-                            attach_endpoint += "/messages/" + item["id"]
-                            attach_endpoint += "/attachments/" + attachment["id"]
-
-                            response = helper.send_http_request("https://graph.microsoft.com/v1.0" + attach_endpoint, "GET", headers=headers, parameters=None, timeout=(15.0, 15.0)).json()
+                            my_added_data = {}
                             
-                            # helper.log_debug(response['contentBytes'])
-                            
-                            attach_b64decode = base64.b64decode(response['contentBytes'])
-                            
+                            my_added_data['name'] = attachment['name']
+                            my_added_data['odata_type'] = attachment['@odata.type']
+                            my_added_data['id'] = attachment['id']
+                            my_added_data['contentType'] = attachment['contentType']
+                            my_added_data['size'] = attachment['size']
+
+                            attach_data.append(my_added_data)
+                        
+                        #Looks for referenceAttachment type, which is a link to a file on OneDrive or other supported storage location
+                        if attachment["@odata.type"] == "#microsoft.graph.referenceAttachment":
+
+                            my_added_data = {}
+
+                            my_added_data['name'] = attachment['name']
+                            my_added_data['odata_type'] = attachment['@odata.type']
+                            my_added_data['id'] = attachment['id']
+                            my_added_data['contentType'] = attachment['contentType']
+                            my_added_data['size'] = attachment['size']
+
+                            attach_data.append(my_added_data)
+                        
+                        #Looks for fileAttachment type, which is a standard email attachment.
+                        if attachment["@odata.type"] == "#microsoft.graph.fileAttachment":
+
+                            my_added_data = {}
+
+                            attach_b64decode = base64.b64decode(attachment['contentBytes'])
+
+                            #Selects which hashing algorithm (md5, sha1, sha256) to use on the attachment.
                             if helper.get_arg('get_attachment_info') and helper.get_arg('file_hash_algorithm') == 'md5':
                                 hash_object = hashlib.md5(attach_b64decode)
                             if helper.get_arg('get_attachment_info') and helper.get_arg('file_hash_algorithm') == 'sha1':
@@ -174,43 +417,204 @@ def collect_events(helper, ew):
 
                             att_hash = hash_object.hexdigest()
 
-                            my_added_data = attach_resp['value']
-                            my_added_data[count]['file_hash'] = att_hash
+                            my_added_data['name'] = attachment['name']
+                            my_added_data['odata_type'] = attachment['@odata.type']
+                            my_added_data['id'] = attachment['id']
+                            my_added_data['contentType'] = attachment['contentType']
+                            my_added_data['size'] = attachment['size']
+                            my_added_data['file_hash'] = att_hash
+                        
+                            #Attempts to open up zip file to list file names and hashes if the option is selected in the input.
+                            if helper.get_arg('get_attachment_info') and helper.get_arg('read_zip_files') and attachment['@odata.mediaContentType'] == 'application/zip':
+
+                                filedata_encoded = attachment['contentBytes'].encode()
+                                file_bytes = base64.b64decode(filedata_encoded)
+
+                                zipbytes = io.BytesIO(file_bytes)
                             
-                            if helper.get_arg('get_attachment_info') and ('html_analysis' in helper.get_arg('attachment_analysis')):
+                                try:
+                                    zipfile = ZipFile(zipbytes)
                                 
-                                supported_content = ['text/html']
+                                    zipmembers = zipfile.namelist()
                                 
-                                if response['@odata.mediaContentType'] in supported_content:
+                                    zip_files = []
+                                    zip_hashes = []
+                                
+                                    for file in zipmembers:
+                                   
+                                        zip_read = zipfile.read(file)
                                     
-                                    filedata_encoded = response['contentBytes'].encode()
-                                    file_bytes = base64.b64decode(filedata_encoded)
-                                    
-                                    uncooked_soup = html.unescape(str(file_bytes))
-                                    
-                                    soup = BeautifulSoup(uncooked_soup)
-                                    
-                                    soup_data = str(soup)
-                                    
-                                    my_added_data[count]['html_data'] = soup_data
-                                    
-                                    links = re.findall(r'(http|ftp|https):\/\/([\w_-]+(?:(?:\.[\w_-]+)+))([\w.,@?^=%&:\/~+#-;]*[\w@?^=%&\/~+#-])?', soup_data)
-                                    
-                                    html_links = []
-
-                                    for link in links:
-                                        link_url = link[0] + "://" + link[1] + link[2]
-                                        if not link_url in html_links:
-                                            html_links.append(link_url)
-
-                                    if html_links:
-                                        my_added_data[count]['links'] = html_links
+                                        if helper.get_arg('file_hash_algorithm') == 'md5':
+                                            hash_object = hashlib.md5(zip_read)
+                                        if helper.get_arg('file_hash_algorithm') == 'sha1':
+                                            hash_object = hashlib.sha1(zip_read)
+                                        if helper.get_arg('file_hash_algorithm') == 'sha256':
+                                            hash_object = hashlib.sha256(zip_read)    
                                         
-                                
-                            if helper.get_arg('get_attachment_info') and ('macro_analysis' in helper.get_arg('attachment_analysis')):
-                            
-                                filename = response['name']
+                                        zip_hash = hash_object.hexdigest()
+                                    
+                                        if not file in zip_files:
+                                        
+                                            zip_files.append(file)
+                                            zip_hashes.append(zip_hash)
 
+                                        if zip_files:
+                                            my_added_data['zip_files'] = zip_files
+                                            my_added_data['zip_hashes'] = zip_hashes
+                                        
+                                except:
+                                    my_added_data['attention'] = 'could not extract the zip file, may be encrypted'
+                                
+                                
+                            #Routine to gather info on CSV file types.
+                            if helper.get_arg('get_attachment_info') and attachment['@odata.mediaContentType'] == 'text/csv':
+
+                                filedata_encoded = attachment['contentBytes'].encode()
+                                file_bytes = base64.b64decode(filedata_encoded)
+
+                                csvbytes = io.BytesIO(file_bytes)
+                            
+                                try:
+                                    csvstring = csvbytes.read().decode('utf-8')
+
+                                    if helper.get_arg('extract_iocs'):
+
+                                        iocs = extract_iocs(helper, csvstring)
+
+                                        csv_iocs = []
+
+                                        for ioc in iocs:
+                                            if not ioc in csv_iocs:
+                                                csv_iocs.append(ioc)
+                                        if csv_iocs:
+                                            my_added_data['iocs'] = csv_iocs
+
+                                    #Will attempt to ingest the actual contents of the CSV file if this option is selected in the input.
+                                    if 'csv' in helper.get_arg('attachment_data_ingest'):
+                                        my_added_data['csv_data'] = csvstring
+                                    
+                                except:
+                                    my_added_data['attention'] = 'could not parse the csv document, may be encrypted'
+                                
+
+                            #Routine to gather info on HTML file types.
+                            if helper.get_arg('get_attachment_info') and attachment['@odata.mediaContentType'] == 'text/html':
+
+                                filedata_encoded = attachment['contentBytes'].encode()
+                                file_bytes = base64.b64decode(filedata_encoded)
+
+                                try:
+                                    uncooked_soup = html.unescape(str(file_bytes))
+
+                                    soup = BeautifulSoup(uncooked_soup)
+
+                                    soup_data = str(soup)
+
+                                    if helper.get_arg('extract_iocs'):
+
+                                        iocs = extract_iocs(helper, soup_data)
+
+                                        html_iocs = []
+
+                                        for ioc in iocs:
+                                            if not ioc in html_iocs:
+                                                html_iocs.append(ioc)
+                                        if html_iocs:
+                                            my_added_data['iocs'] = html_iocs
+
+                                    #Will attempt to ingest the actual contents of the HTML file if this option is selected in the input.
+                                    if 'html' in helper.get_arg('attachment_data_ingest'):
+                                        my_added_data['html_data'] = soup_data
+                                    
+                                except:
+                                    my_added_data['attention'] = 'could not parse the html document, may be encrypted'
+
+
+                            #Routine to gather info on PDF file types.
+                            if helper.get_arg('get_attachment_info') and attachment['@odata.mediaContentType'] == 'application/pdf':
+
+                                filedata_encoded = attachment['contentBytes'].encode()
+
+                                file_bytes = base64.b64decode(filedata_encoded)
+
+                                pdf_content = io.BytesIO(file_bytes)
+
+                                output_string = StringIO()
+
+                                try:
+                                    parser = PDFParser(pdf_content)
+                                
+                                    doc = PDFDocument(parser)
+
+                                    rsrcmgr = PDFResourceManager()
+
+                                    device = TextConverter(rsrcmgr, output_string, laparams=LAParams())
+
+                                    interpreter = PDFPageInterpreter(rsrcmgr, device)
+
+                                    for page in PDFPage.create_pages(doc):
+                                        interpreter.process_page(page)
+
+                                    pdf_text = output_string.getvalue()
+                                
+                                    if helper.get_arg('extract_iocs'):
+
+                                        iocs = extract_iocs(helper, pdf_text)
+
+                                        pdf_iocs = []
+
+                                        for ioc in iocs:
+                                            if not ioc in pdf_iocs:
+                                                pdf_iocs.append(ioc)
+                                            if pdf_iocs:
+                                                my_added_data['iocs'] = pdf_iocs
+
+                                    #Will attempt to ingest the actual contents of the PDF file if this option is selected in the input.
+                                    if 'pdf' in helper.get_arg('attachment_data_ingest'):
+                                        my_added_data['pdf_data'] = pdf_text
+                                
+                                except:
+                                    my_added_data['attention'] = 'could not parse the pdf document, may be encrypted'
+
+
+                            #Routine to gather info on XML file types.
+                            if helper.get_arg('get_attachment_info') and attachment['@odata.mediaContentType'] == 'text/xml':
+
+                                filedata_encoded = attachment['contentBytes'].encode()
+
+                                file_bytes = base64.b64decode(filedata_encoded)
+
+                                try:
+                                    soup = BeautifulSoup(file_bytes, 'lxml')
+
+                                    soup_data = str(soup)
+
+                                    if helper.get_arg('extract_iocs'):
+
+                                        iocs = extract_iocs(helper, soup_data)
+
+                                        xml_iocs = []
+
+                                        for ioc in iocs:
+                                            if not ioc in xml_iocs:
+                                                xml_iocs.append(ioc)
+                                        if xml_iocs:
+                                            my_added_data['iocs'] = xml_iocs
+
+                                    #Will attempt to ingest the actual contents of the XML file if this option is selected in the input.
+                                    if 'xml' in helper.get_arg('attachment_data_ingest'):
+                                        my_added_data['xml_data'] = soup_data
+                                    
+                                except:
+                                    my_added_data['attention'] = 'could not parse the xml document, may be encrypted'
+                                
+
+                            #Routine to do macro analysis on files of supported content types listed below if selected in the input setup.  This uses OLEVBA tools to detect macros in the attachment, then analyses the macros.
+                            if helper.get_arg('get_attachment_info') and helper.get_arg('macro_analysis'):
+
+                                filename = attachment['name']
+
+                                #Content types supported by OLEVBA.
                                 supported_content = ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                                 'application/vnd.openxmlformats-officedocument.spreadsheetml.template',
                                 'application/vnd.ms-excel.sheet.macroenabled.12',
@@ -233,75 +637,34 @@ def collect_events(helper, ew):
                                 'application/vnd.ms-word.document.macroenabled.12',
                                 'application/vnd.ms-word.template.macroenabled.12']
 
-                                if response['@odata.mediaContentType'] in supported_content:
+                                if attachment['@odata.mediaContentType'] in supported_content:
 
-                                    filedata_encoded = response['contentBytes'].encode()
+                                    filedata_encoded = attachment['contentBytes'].encode()
                                     file_bytes = base64.b64decode(filedata_encoded)
 
-                                    vbaparser = VBA_Parser(filename, data=file_bytes)
+                                    try:
+                                        vbaparser = VBA_Parser(filename, data=file_bytes)
 
-                                    if vbaparser.detect_vba_macros():
-                                        my_added_data[count]['macros_exist'] = "true"
+                                        if vbaparser.detect_vba_macros():
+                                            my_added_data['macros_exist'] = "true"
 
-                                        macro_analysis = VBA_Parser.analyze_macros(vbaparser)
-                                        helper.log_debug("GET Response: " + json.dumps(macro_analysis, indent=4))
+                                            macro_analysis = VBA_Parser.analyze_macros(vbaparser)
+                                            helper.log_debug("GET Response: " + json.dumps(macro_analysis, indent=4))
 
-                                        if macro_analysis == []:
-                                            my_added_data[count]['macro_analysis'] = "Macro doesn't look bad, but I never trust macros."
+                                            if macro_analysis == []:
+                                                my_added_data['macro_analysis'] = "Macro doesn't look bad, but I never trust macros."
+                                            else:
+                                                my_added_data['macros_analysis'] = macro_analysis
+
                                         else:
-                                            my_added_data[count]['macros_analysis'] = macro_analysis
+                                            my_added_data['macros_exist'] = "false"
+                                        
+                                    except:
+                                        my_added_data['attention'] = 'could not extract the office document, may be encrypted'
 
-                                    else:
-                                        my_added_data[count]['macros_exist'] = "false"
+                            attach_data.append(my_added_data)
 
-                            count += 1
-
-                        attach_data.append(my_added_data)
-
-                        item['attachments'] = attach_data
-
-    for message in messages:
-        for item in message:
-
-            endpoint = "/users/" + helper.get_arg('audit_email_account')
-            endpoint += "/messages/" + item["id"]
-
-            body_extract = helper.send_http_request("https://graph.microsoft.com/v1.0" + endpoint, "GET", headers=headers, parameters=None, timeout=(15.0, 15.0)).json()
-
-            body_payload = body_extract["body"]["content"]
-
-            if helper.get_arg('get_body'):
-                soup = BeautifulSoup(body_payload, 'lxml')
-                soup_data = str(soup.text)
-                item['body'] = soup_data
-                
-            links = re.findall(r'(http|ftp|https):\/\/([\w_-]+(?:(?:\.[\w_-]+)+))([\w.,@?^=%&:\/~+#-;]*[\w@?^=%&\/~+#-])?', body_payload)
-
-            email_links = []
-
-            for link in links:
-                link_url = link[0] + "://" + link[1] + link[2]
-                if not link_url in email_links:
-                    email_links.append(link_url)
-
-            if email_links:
-                item['links'] = email_links
-
-    
-    for message in messages:
-        if helper.get_arg('show_relays'):
-            for item in message:
-
-                endpoint = "/users/" + helper.get_arg('audit_email_account')
-                endpoint += "/messages/" + item["id"] + "/$value"
-
-                mime_response = helper.send_http_request("https://graph.microsoft.com/v1.0" + endpoint, "GET", headers=headers, parameters=None, timeout=(15.0, 15.0)).content
-
-                email = BytesParser().parsebytes(mime_response)
-            
-                relays = email.get_all('Received')
-
-                item['relays'] = relays
-
-        _write_events(helper, ew, emails=message)
+            message_items['attachments'] = attach_data
+        
+        _write_events(helper, ew, messages=message_data)
     _purge_messages(helper, messages)
