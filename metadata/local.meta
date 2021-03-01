@@ -16,3 +16,18 @@ modtime = 1610058883.033515000
 owner = admin
 version = 8.0.6
 modtime = 1610058883.040675000
+
+[inputs/o365_email%3A%2F%2FInbound_Email]
+owner = admin
+version = 8.0.6
+modtime = 1614565767.232386000
+
+[inputs/o365_email%3A%2F%2FOutbound_Email]
+owner = admin
+version = 8.0.6
+modtime = 1613080986.418927000
+
+[inputs/o365_email%3A%2F%2FInternal_Email]
+owner = admin
+version = 8.0.6
+modtime = 1613081097.677000000

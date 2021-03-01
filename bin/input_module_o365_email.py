@@ -31,11 +31,12 @@ CURRENT_TOKEN = None
 LOG_DIRECTORY_NAME = 'logs'
 TIME_FORMAT = '%Y-%m-%dT%H:%M:%S.000Z'
 
-#Regex statements used in IOC extraction routines.
+#Regex statements
 url_re = re.compile(r'(http|ftp|https|ftps|scp):\/\/([\w_-]+(?:(?:\.[\w_-]+)+))([\w.,@?^=%&:\/~+#-;]*[\w@?^=%&\/~+#-])?')
 domain_re = re.compile(r'\b((?=[a-z0-9-]{1,63}\.)(xn--)?[a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,63}\b')
 ipv4_re = re.compile(r'((?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)')
 ipv6_re = re.compile(r'\b(?:[a-f0-9]{1,4}:|:){2,7}(?:[a-f0-9]{1,4}|:)\b')
+pixeltrack_re = re.compile(r'<img.+?(width|height)=[\"\']1[\"\'].+?(width|height)=[\"\']1[\"\'].*>')
 
 #Setting minimum interval in TA to 60 seconds
 def validate_input(helper, definition):
@@ -166,6 +167,13 @@ def extract_ipv6(data):
         ip = ip.group(0)
         yield ip
 
+#Function to check if returned url is secure
+def is_https(url):
+    if url.startswith("https://"):
+        return True
+    else:
+        return False
+
 #Main function for gathering emails.
 def collect_events(helper, ew):
     
@@ -177,8 +185,8 @@ def collect_events(helper, ew):
     access_token = _get_access_token(helper)
 
     headers = {"Authorization": "Bearer " + access_token,
-                "User-Agent": "MicrosoftGraphEmail-Splunk/" + _get_app_version(helper),
-                "Prefer": "outlook.body-content-type=text"}
+                "User-Agent": "MicrosoftGraphEmail-Splunk/" + _get_app_version(helper)}
+                #"Prefer": "outlook.body-content-type=text"}
 
     #defining email account to retrieve messages from
     endpoint = "/users/" + helper.get_arg('audit_email_account')
@@ -221,7 +229,7 @@ def collect_events(helper, ew):
 
         url_count = 0
     
-        while "@odata.nextLink" in messages_response:
+        while ("@odata.nextLink" in messages_response) and (is_https(messages_response["@odata.nextLink"])):
             if url_count < url_count_limit:
                 nextlinkurl = messages_response["@odata.nextLink"]
                 messages_response = helper.send_http_request(nextlinkurl, "GET", headers=headers, parameters=None, timeout=(15.0, 15.0)).json()
@@ -257,6 +265,15 @@ def collect_events(helper, ew):
             attachments = item['attachments']
             internet_message_headers = item['internetMessageHeaders']
             single_value_properties = item['singleValueExtendedProperties']
+
+            #tracking pixel detection
+            if pixeltrack_re.search(message_body):
+                pixel_data = pixeltrack_re.search(message_body)
+                message_items['tracking_pixel'] = "true"
+                message_items['tracking_pixel_data'] = pixel_data.group(0)
+            else:
+                message_items['tracking_pixel'] = "false"
+
             
             #message path calculations
             message_path = []
