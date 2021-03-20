@@ -1,6 +1,5 @@
 [o365_email://<name>]
 audit_email_account = Please enter the audit email configured in the O365 mail flow rule
-inbox_id = Go to https://developer.microsoft.com/en-us/graph/graph-explorer, log in as the audit email account, and run https://graph.microsoft.com/v1.0/me/mailFolders.  Copy the id value for the Inbox folder.
 tenant = Please enter the Tenant ID from the Azure App registration process
 endpoint = 
 get_attachment_info = Gathers basic attachment info (name, type, size, hash, etc).

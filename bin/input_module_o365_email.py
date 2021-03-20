@@ -36,7 +36,7 @@ url_re = re.compile(r'(http|ftp|https|ftps|scp):\/\/([\w_-]+(?:(?:\.[\w_-]+)+))(
 domain_re = re.compile(r'\b((?=[a-z0-9-]{1,63}\.)(xn--)?[a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,63}\b')
 ipv4_re = re.compile(r'((?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)')
 ipv6_re = re.compile(r'\b(?:[a-f0-9]{1,4}:|:){2,7}(?:[a-f0-9]{1,4}|:)\b')
-pixeltrack_re = re.compile(r'<img.+?(width|height)=[\"\']1[\"\'].+?(width|height)=[\"\']1[\"\'].*>')
+pixeltrack_re = re.compile(r'<img src=[\"\']http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+[\"\'] (width|height)=[\"\']1[\"\'] (width|height)=[\"\']1[\"\']>')
 
 #Setting minimum interval in TA to 60 seconds
 def validate_input(helper, definition):
@@ -107,14 +107,33 @@ def _purge_messages(helper, messages):
 
     headers = {"Authorization": "Bearer " + access_token,
                 "Content-type": "application/json"}
+
+    #Turns off read receipts on messages in the compliance mailbox.  Doesn't affect read receipts to original user.
+    _disable_rr = {
+                 "singleValueExtendedProperties": [
+                     {
+                     "id": "Boolean 0x0C06",
+                     "value": "false"
+                     },
+                     {
+                     "id": "Boolean 0x0029",
+                     "value": "false"
+                     }
+                 ]
+                 }
+
+    #Purge folder
     _data = {
             "destinationId": "recoverableitemspurges"
             }
 
     for message in messages:
         for item in message:
-            response = helper.send_http_request(graph_url + "/users/" + helper.get_arg('audit_email_account') + "/messages/" + item["id"] + "/move", "POST", headers=headers, payload=_data, timeout
-=(15.0, 15.0))
+
+            if item["isReadReceiptRequested"]:
+                remove_receipt_response = helper.send_http_request(graph_url + "/users/" + helper.get_arg('audit_email_account') + "/messages/" + item["id"], "PATCH", headers=headers, payload=_disable_rr, timeout=(15.0, 15.0))
+
+            response = helper.send_http_request(graph_url + "/users/" + helper.get_arg('audit_email_account') + "/messages/" + item["id"] + "/move", "POST", headers=headers, payload=_data, timeout=(15.0, 15.0))
 
 #Top level IOC extraction from various items (email bodies, supported file types, etc).  Currently only attempting URLS, domains, and IP address (v4 and v6). Calls URL, Domain, and IP address functions below.
 def extract_iocs(helper, data):
@@ -192,13 +211,13 @@ def collect_events(helper, ew):
     endpoint = "/users/" + helper.get_arg('audit_email_account')
 
     #defining inbox id to retrieve messages from
-    endpoint += "/mailFolders/" + helper.get_arg('inbox_id') + "/messages/"
+    endpoint += "/mailFolders/inbox/messages/"
 
     #expanding property id 0x0E08 to gather message size, and then expanding attachments to get fileattachment type contentBytes
     endpoint += "?$expand=SingleValueExtendedProperties($filter=Id eq 'LONG 0x0E08'),attachments"
         
     #selecting which fields to retrieve from emails
-    endpoint += "&$select=receivedDateTime,subject,sender,from,hasAttachments,internetMessageId,toRecipients,ccRecipients,bccRecipients,replyTo,internetMessageHeaders,body,bodyPreview"
+    endpoint += "&$select=receivedDateTime,subject,sender,from,hasAttachments,internetMessageId,toRecipients,ccRecipients,bccRecipients,replyTo,internetMessageHeaders,body,bodyPreview,isReadReceiptRequested,isDeliveryReceiptRequested"
 
     #defining how many messages to retrieve from each page
     endpoint += "&$top=980"
@@ -241,6 +260,7 @@ def collect_events(helper, ew):
 
     #Routine to find attachments in messages.  This caters for both standard, as well as inline attachments.  MS Graph doesn't list inline attachments in the "hasAttachments" value, this fixes that.
     message_data = []
+    attach_data = []
     
     for message in messages:
         
@@ -263,8 +283,89 @@ def collect_events(helper, ew):
             message_body = item['body']['content']
             body_preview = item['bodyPreview']
             attachments = item['attachments']
-            internet_message_headers = item['internetMessageHeaders']
             single_value_properties = item['singleValueExtendedProperties']
+
+            if 'internetMessageHeaders' in item:
+                internet_message_headers = item['internetMessageHeaders']
+
+                if helper.get_arg('get_internet_headers'):
+                    message_items['Internet-Headers'] = internet_message_headers
+
+                #message path calculations
+                message_path = []
+                path_item = {}
+            
+                for item in internet_message_headers:
+                    if item['name'] == "Received":
+                        path_item=item
+                        message_path.append(path_item)
+            
+                src_line = str(message_path[-1])
+                dest_line = str(message_path[0])
+            
+                re_by = re.compile(r'(?<=\bby\s)(\S+)')
+                re_from = re.compile(r'(?<=\bfrom\s)(\S+)')
+            
+                dest = re_by.search(dest_line)
+            
+                if re_from.search(src_line):
+                    src = re_from.search(src_line)
+                elif re_by.search(src_line):
+                    src = re_by.search(src_line)
+
+                message_items['src'] = str(src[0])    
+                message_items['dest'] = str(dest[0])
+
+                if helper.get_arg('get_message_path'):
+                    message_items['message_path'] = message_path
+
+                if helper.get_arg('get_x_headers'):
+                
+                    x_headers = []
+                    x_header_item = {}
+                
+                    for item in internet_message_headers:
+                        if "X-" in item['name']:
+                            x_header_item=item
+                            x_headers.append(x_header_item)
+                        
+                    message_items['X-Headers'] = x_headers
+
+                if helper.get_arg('get_auth_results'):
+                
+                    auth_results = []
+                    auth_results_item = {}
+                
+                    for item in internet_message_headers:
+                        if "Authentication-Results" in item['name']:
+                            auth_results_item=item
+                            auth_results.append(auth_results_item)
+                        
+                    message_items['Authentication-Results'] = auth_results
+
+                if helper.get_arg('get_spf_results'):
+                
+                    spf_results = []
+                    spf_results_item = {}
+                
+                    for item in internet_message_headers:
+                        if "Received-SPF" in item['name']:
+                            spf_results_item=item
+                            spf_results.append(spf_results_item)
+                        
+                    message_items['Received-SPF'] = spf_results
+
+                if helper.get_arg('get_dkim_signature'):
+                
+                    dkim_sig = []
+                    dkim_sig_item = {}
+                
+                    for item in internet_message_headers:
+                        if "DKIM-Signature" in item['name']:
+                            dkim_sig_item=item
+                            dkim_sig.append(dkim_sig_item)
+                        
+                    message_items['DKIM-Signature'] = dkim_sig
 
             #tracking pixel detection
             if pixeltrack_re.search(message_body):
@@ -274,32 +375,6 @@ def collect_events(helper, ew):
             else:
                 message_items['tracking_pixel'] = "false"
 
-            
-            #message path calculations
-            message_path = []
-            path_item = {}
-            
-            for item in internet_message_headers:
-                if item['name'] == "Received":
-                    path_item=item
-                    message_path.append(path_item)
-            
-            src_line = str(message_path[-1])
-            dest_line = str(message_path[0])
-            
-            re_by = re.compile(r'(?<=\bby\s)(\S+)')
-            re_from = re.compile(r'(?<=\bfrom\s)(\S+)')
-            
-            dest = re_by.search(dest_line)
-            
-            if re_from.search(src_line):
-                src = re_from.search(src_line)
-            elif re_by.search(src_line):
-                src = re_by.search(src_line)
-            
-            message_items['src'] = str(src[0])    
-            message_items['dest'] = str(dest[0])
-            
             #size mapping
             for item in single_value_properties:
                 if item['id'] == "Long 0xe08":
@@ -317,59 +392,6 @@ def collect_events(helper, ew):
             if helper.get_arg('get_attachment_info'):
                 message_items['attachments'] = attachments
                 
-            if helper.get_arg('get_message_path'):
-                message_items['message_path'] = message_path
-            
-            if helper.get_arg('get_x_headers'):
-                
-                x_headers = []
-                x_header_item = {}
-                
-                for item in internet_message_headers:
-                    if "X-" in item['name']:
-                        x_header_item=item
-                        x_headers.append(x_header_item)
-                        
-                message_items['X-Headers'] = x_headers
-             
-            if helper.get_arg('get_auth_results'):
-                
-                auth_results = []
-                auth_results_item = {}
-                
-                for item in internet_message_headers:
-                    if "Authentication-Results" in item['name']:
-                        auth_results_item=item
-                        auth_results.append(auth_results_item)
-                        
-                message_items['Authentication-Results'] = auth_results
-            
-            if helper.get_arg('get_spf_results'):
-                
-                spf_results = []
-                spf_results_item = {}
-                
-                for item in internet_message_headers:
-                    if "Received-SPF" in item['name']:
-                        spf_results_item=item
-                        spf_results.append(spf_results_item)
-                        
-                message_items['Received-SPF'] = spf_results
-            
-            if helper.get_arg('get_dkim_signature'):
-                
-                dkim_sig = []
-                dkim_sig_item = {}
-                
-                for item in internet_message_headers:
-                    if "DKIM-Signature" in item['name']:
-                        dkim_sig_item=item
-                        dkim_sig.append(dkim_sig_item)
-                        
-                message_items['DKIM-Signature'] = dkim_sig
-                
-            message_data.append(message_items)
-            
             if helper.get_arg('get_body'):
                 if helper.get_arg('extract_iocs'):
 
@@ -387,7 +409,6 @@ def collect_events(helper, ew):
 
                 if message_items['attachments'] is not None:
 
-                    attach_data = []
 
                     for attachment in message_items["attachments"]:
 
@@ -682,6 +703,7 @@ def collect_events(helper, ew):
                             attach_data.append(my_added_data)
 
             message_items['attachments'] = attach_data
+            message_data.append(message_items)
         
         _write_events(helper, ew, messages=message_data)
     _purge_messages(helper, messages)

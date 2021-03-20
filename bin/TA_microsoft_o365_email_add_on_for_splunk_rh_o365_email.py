@@ -44,16 +44,6 @@ fields = [
         )
     ), 
     field.RestField(
-        'inbox_id',
-        required=True,
-        encrypted=False,
-        default=None,
-        validator=validator.String(
-            min_len=0, 
-            max_len=8192, 
-        )
-    ), 
-    field.RestField(
         'tenant',
         required=True,
         encrypted=False,

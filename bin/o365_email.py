@@ -50,10 +50,6 @@ class ModInputo365_email(modinput_wrapper.base_modinput.BaseModInput):
                                          description="Please enter the audit email configured in the O365 mail flow rule",
                                          required_on_create=True,
                                          required_on_edit=False))
-        scheme.add_argument(smi.Argument("inbox_id", title="Inbox ID",
-                                         description="Go to https://developer.microsoft.com/en-us/graph/graph-explorer, log in as the audit email account, and run https://graph.microsoft.com/v1.0/me/mailFolders.  Copy the id value for the Inbox folder.",
-                                         required_on_create=True,
-                                         required_on_edit=False))
         scheme.add_argument(smi.Argument("tenant", title="Tenant ID",
                                          description="Please enter the Tenant ID from the Azure App registration process",
                                          required_on_create=True,
